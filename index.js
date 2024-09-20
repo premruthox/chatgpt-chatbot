@@ -9,6 +9,7 @@ import { promisify } from "util";
 import { fileURLToPath } from "url"; // Needed for __dirname fix
 import pdfParse from "pdf-parse";
 import mammoth from "mammoth"; // Import mammoth for .docx files
+import xlsx from "xlsx";
 
 // Manual __dirname definition
 const __filename = fileURLToPath(import.meta.url);
@@ -24,13 +25,13 @@ const readFileAsync = promisify(fs.readFile);
 app.use(express.json());
 
 // API to upload resume and ask questions
-app.post("/upload-resume", upload.single("resume"), async (req, res) => {
+app.post("/upload-resume", upload.single("file"), async (req, res) => {
   const { question } = req.body;
   let filePath;
 
   try {
     if (!req.file) {
-      return res.status(400).json({ error: "Please upload a resume file." });
+      return res.status(400).json({ error: "Please upload a file." });
     }
 
     // Get file path
@@ -39,11 +40,11 @@ app.post("/upload-resume", upload.single("resume"), async (req, res) => {
     let fileContent;
 
     // Handle different file types
-    if (req.file.mimetype === "text/plain") {
-      // Read a .txt file
-      fileContent = await readFileAsync(filePath, "utf-8"); // Add 'await'
-    } else if (req.file.mimetype === "application/pdf") {
-      // Read a PDF file and extract the text using pdf-parse
+    const fileType = req.file.mimetype;
+
+    if (fileType === "text/plain") {
+      fileContent = await readFileAsync(filePath, "utf-8");
+    } else if (fileType === "application/pdf") {
       const fileBuffer = await readFileAsync(filePath); // Read file buffer
       const pdfData = await pdfParse(fileBuffer);
       fileContent = pdfData.text;
@@ -54,10 +55,10 @@ app.post("/upload-resume", upload.single("resume"), async (req, res) => {
           .json({ error: "Could not extract text from the PDF." });
       }
     } else if (
-      req.file.mimetype ===
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      fileType ===
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+      fileType === "application/msword"
     ) {
-      // If it's a .docx file, extract the text using mammoth
       const fileBuffer = await readFileAsync(filePath); // Read file buffer
       const mammothData = await mammoth.extractRawText({ buffer: fileBuffer });
       fileContent = mammothData.value;
@@ -67,19 +68,39 @@ app.post("/upload-resume", upload.single("resume"), async (req, res) => {
           .status(400)
           .json({ error: "Could not extract text from the Word document." });
       }
+    } else if (
+      fileType ===
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+      fileType === "application/vnd.ms-excel"
+    ) {
+      const workbook = xlsx.readFile(filePath); // Read Excel file
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      fileContent = xlsx.utils.sheet_to_csv(sheet); // Convert to CSV for readable content
+
+      // Images (jpeg, png, etc.)
+    } else if (fileType.startsWith("image/")) {
+      fileContent = `An image file (${req.file.originalname}) was uploaded.`;
+
+      // Video files
+    } else if (fileType.startsWith("video/")) {
+      fileContent = `A video file (${req.file.originalname}) was uploaded.`;
+
+      // Other unsupported file types
     } else {
-      return res.status(400).json({
-        error: "Unsupported file type. Please upload a .txt or .pdf file.",
-      });
+      return res
+        .status(400)
+        .json({ error: `Unsupported file type: ${fileType}` });
     }
 
     // Ask OpenAI the question with the resume data
     const completion = await openai.createChatCompletion({
       model: "gpt-3.5-turbo",
+      // model: 'gpt-4',
       messages: [
         {
           role: "user",
-          content: `Here is a resume: \n${fileContent}\n\nQuestion: ${question}`,
+          content: `${fileContent}\n\nQuestion: ${question}`,
         },
       ],
     });
