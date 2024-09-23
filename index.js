@@ -6,9 +6,9 @@ import multer from "multer";
 import fs from "fs";
 import path from "path";
 import { promisify } from "util";
-import { fileURLToPath } from "url"; // Needed for __dirname fix
+import { fileURLToPath } from "url";
 import pdfParse from "pdf-parse";
-import mammoth from "mammoth"; // Import mammoth for .docx files
+import mammoth from "mammoth";
 import xlsx from "xlsx";
 
 // Manual __dirname definition
@@ -38,12 +38,14 @@ app.post("/upload-resume", upload.single("file"), async (req, res) => {
     filePath = path.join(__dirname, "uploads", req.file.filename);
 
     let fileContent;
+    let gptObject;
 
     // Handle different file types
     const fileType = req.file.mimetype;
 
     if (fileType === "text/plain") {
       fileContent = await readFileAsync(filePath, "utf-8");
+      gptObject = createGptObject(fileContent, question);
     } else if (fileType === "application/pdf") {
       const fileBuffer = await readFileAsync(filePath); // Read file buffer
       const pdfData = await pdfParse(fileBuffer);
@@ -53,6 +55,8 @@ app.post("/upload-resume", upload.single("file"), async (req, res) => {
         return res
           .status(400)
           .json({ error: "Could not extract text from the PDF." });
+      } else {
+        gptObject = createGptObject(fileContent, question);
       }
     } else if (
       fileType ===
@@ -67,6 +71,8 @@ app.post("/upload-resume", upload.single("file"), async (req, res) => {
         return res
           .status(400)
           .json({ error: "Could not extract text from the Word document." });
+      } else {
+        gptObject = createGptObject(fileContent, question);
       }
     } else if (
       fileType ===
@@ -78,32 +84,19 @@ app.post("/upload-resume", upload.single("file"), async (req, res) => {
       const sheet = workbook.Sheets[sheetName];
       fileContent = xlsx.utils.sheet_to_csv(sheet); // Convert to CSV for readable content
 
-      // Images (jpeg, png, etc.)
+      gptObject = createGptObject(fileContent, question);
     } else if (fileType.startsWith("image/")) {
-      fileContent = `An image file (${req.file.originalname}) was uploaded.`;
-
-      // Video files
-    } else if (fileType.startsWith("video/")) {
-      fileContent = `A video file (${req.file.originalname}) was uploaded.`;
-
-      // Other unsupported file types
+      const base64 = imageToBase64(filePath);
+      fileContent = base64;
+      gptObject = createGptObjecForImage(fileContent, question);
     } else {
       return res
         .status(400)
         .json({ error: `Unsupported file type: ${fileType}` });
     }
 
-    // Ask OpenAI the question with the resume data
-    const completion = await openai.createChatCompletion({
-      model: "gpt-3.5-turbo",
-      // model: 'gpt-4',
-      messages: [
-        {
-          role: "user",
-          content: `${fileContent}\n\nQuestion: ${question}`,
-        },
-      ],
-    });
+    // Call for the opren AI API
+    const completion = await openai.createChatCompletion(gptObject);
 
     // Get completion text
     const completionText = completion.data.choices[0].message.content;
@@ -121,6 +114,52 @@ app.post("/upload-resume", upload.single("file"), async (req, res) => {
       fs.unlinkSync(filePath);
     }
   }
+});
+
+const imageToBase64 = (filePath) => {
+  const imageBuffer = fs.readFileSync(filePath);
+  const base64Image = imageBuffer.toString("base64");
+  return base64Image;
+};
+
+const createGptObject = (fileContent, question) => ({
+  // model: "gpt-3.5-turbo",
+  // model: "gpt-4o-mini",
+  // model: 'gpt-4',
+  model: "gpt-4o",
+  messages: [
+    {
+      role: "user",
+      content: `${fileContent}\n\nQuestion: ${question}`,
+    },
+  ],
+});
+
+const createGptObjecForImage = (fileContent, question) => ({
+  // model: "gpt-3.5-turbo",
+  // model: "gpt-4o-mini",
+  // model: 'gpt-4',
+  model: "gpt-4o",
+  messages: [
+    {
+      role: "user",
+      content: [
+        {
+          type: "image_url",
+          image_url: {
+            url: `data:image/jpeg;base64,${fileContent}`,
+          },
+        },
+        {
+          type: "text",
+          text: `${question}`,
+        },
+      ],
+    },
+  ],
+  response_format: {
+    type: "text",
+  },
 });
 
 // function to work as chat bot
