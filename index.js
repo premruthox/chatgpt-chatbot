@@ -30,72 +30,88 @@ app.post("/upload-resume", upload.single("file"), async (req, res) => {
   let filePath;
 
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: "Please upload a file." });
-    }
+    let fileContent = null;
+    let gptObject = null;
 
-    // Get file path
-    filePath = path.join(__dirname, "uploads", req.file.filename);
-
-    let fileContent;
-    let gptObject;
-
-    // Handle different file types
-    const fileType = req.file.mimetype;
-
-    if (fileType === "text/plain") {
-      fileContent = await readFileAsync(filePath, "utf-8");
-      gptObject = createGptObject(fileContent, question);
-    } else if (fileType === "application/pdf") {
-      const fileBuffer = await readFileAsync(filePath); // Read file buffer
-      const pdfData = await pdfParse(fileBuffer);
-      fileContent = pdfData.text;
-
-      if (!fileContent) {
-        return res
-          .status(400)
-          .json({ error: "Could not extract text from the PDF." });
-      } else {
-        gptObject = createGptObject(fileContent, question);
-      }
-    } else if (
-      fileType ===
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-      fileType === "application/msword"
-    ) {
-      const fileBuffer = await readFileAsync(filePath); // Read file buffer
-      const mammothData = await mammoth.extractRawText({ buffer: fileBuffer });
-      fileContent = mammothData.value;
-
-      if (!fileContent) {
-        return res
-          .status(400)
-          .json({ error: "Could not extract text from the Word document." });
-      } else {
-        gptObject = createGptObject(fileContent, question);
-      }
-    } else if (
-      fileType ===
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
-      fileType === "application/vnd.ms-excel"
-    ) {
-      const workbook = xlsx.readFile(filePath); // Read Excel file
-      const sheetName = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
-      fileContent = xlsx.utils.sheet_to_csv(sheet); // Convert to CSV for readable content
-
-      gptObject = createGptObject(fileContent, question);
-    } else if (fileType.startsWith("image/")) {
-      const base64 = imageToBase64(filePath);
-      fileContent = base64;
-      gptObject = createGptObjecForImage(fileContent, question);
-    } else {
+    // Check if both file and question are missing
+    if (!req.file && !question) {
       return res
         .status(400)
-        .json({ error: `Unsupported file type: ${fileType}` });
+        .json({ error: "Please upload a file or provide a question." });
     }
 
-    // Call for the opren AI API
+    // Handle the file if it's uploaded
+    if (req.file) {
+      filePath = path.join(__dirname, "uploads", req.file.filename);
+      const fileType = req.file.mimetype;
+
+      if (fileType === "text/plain") {
+        fileContent = await readFileAsync(filePath, "utf-8");
+      } else if (fileType === "application/pdf") {
+        const fileBuffer = await readFileAsync(filePath); // Read file buffer
+        const pdfData = await pdfParse(fileBuffer);
+        fileContent = pdfData.text;
+
+        if (!fileContent) {
+          return res
+            .status(400)
+            .json({ error: "Could not extract text from the PDF." });
+        }
+      } else if (
+        fileType ===
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+        fileType === "application/msword"
+      ) {
+        const fileBuffer = await readFileAsync(filePath); // Read file buffer
+        const mammothData = await mammoth.extractRawText({
+          buffer: fileBuffer,
+        });
+        fileContent = mammothData.value;
+        if (!fileContent) {
+          return res
+            .status(400)
+            .json({ error: "Could not extract text from the Word document." });
+        }
+      } else if (
+        fileType ===
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+        fileType === "application/vnd.ms-excel"
+      ) {
+        const workbook = xlsx.readFile(filePath); // Read Excel file
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        fileContent = xlsx.utils.sheet_to_csv(sheet); // Convert to CSV for readable content
+      } else if (fileType.startsWith("image/")) {
+        const base64 = imageToBase64(filePath);
+        fileContent = base64;
+      } else {
+        return res
+          .status(400)
+          .json({ error: `Unsupported file type: ${fileType}` });
+      }
+    }
+
+    // Handle all cases:
+    if (fileContent && question) {
+      // Both file and question provided
+      if (req.file.mimetype.startsWith("image/")) {
+        gptObject = createGptObjecForImage(fileContent, question);
+      } else {
+        gptObject = createGptObject(fileContent, question);
+      }
+    } else if (fileContent) {
+      // Only file provided
+      if (req.file.mimetype.startsWith("image/")) {
+        gptObject = createGptObjecForImage(fileContent, "");
+      } else {
+        gptObject = createGptObject(fileContent, "");
+      }
+    } else if (question) {
+      // Only question provided
+      gptObject = createGptObject("", question);
+    }
+
+    // Call the OpenAI API
     const completion = await openai.createChatCompletion(gptObject);
 
     // Get completion text
