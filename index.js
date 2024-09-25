@@ -24,26 +24,34 @@ const readFileAsync = promisify(fs.readFile);
 // Parse JSON body
 app.use(express.json());
 
-// API to upload resume and ask questions
-app.post("/upload-resume", upload.single("file"), async (req, res) => {
+// API to upload multiple files and ask a single question
+app.post("/upload-resume", upload.array("files", 10), async (req, res) => {
   const { question } = req.body;
-  let filePath;
+  let filePaths = [];
 
   try {
-    let fileContent = null;
-    let gptObject = null;
+    const files = req.files; // Access the array of uploaded files
+    // let responses = [];
+    let messages = [];
+    let content = [];
 
-    // Check if both file and question are missing
-    if (!req.file && !question) {
+    if ((!files || !files.length) && !question) {
       return res
         .status(400)
-        .json({ error: "Please upload a file or provide a question." });
+        .json({
+          error: "Please upload at least one file or a question.",
+        });
     }
 
-    // Handle the file if it's uploaded
-    if (req.file) {
-      filePath = path.join(__dirname, "uploads", req.file.filename);
-      const fileType = req.file.mimetype;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const filePath = path.join(__dirname, "uploads", file.filename);
+      filePaths.push(filePath);
+
+      let fileContent = null;
+      // let gptObject = null;
+
+      const fileType = file.mimetype;
 
       if (fileType === "text/plain") {
         fileContent = await readFileAsync(filePath, "utf-8");
@@ -89,27 +97,34 @@ app.post("/upload-resume", upload.single("file"), async (req, res) => {
           .status(400)
           .json({ error: `Unsupported file type: ${fileType}` });
       }
-    }
 
-    // Handle all cases:
-    if (fileContent && question) {
       // Both file and question provided
-      if (req.file.mimetype.startsWith("image/")) {
-        gptObject = createGptObjecForImage(fileContent, question);
+      if (fileType.startsWith("image/")) {
+        let oneContent = createMessageContent(fileContent);
+        content.push(oneContent);
       } else {
-        gptObject = createGptObject(fileContent, question);
+        let message = createMessage(fileContent, "");
+        messages.push(message);
       }
-    } else if (fileContent) {
-      // Only file provided
-      if (req.file.mimetype.startsWith("image/")) {
-        gptObject = createGptObjecForImage(fileContent, "");
-      } else {
-        gptObject = createGptObject(fileContent, "");
-      }
-    } else if (question) {
-      // Only question provided
-      gptObject = createGptObject("", question);
     }
+    // loop end Here =====================>
+
+    let image_message = {};
+    image_message.role = "user";
+    image_message.content = content;
+    messages.push(image_message);
+
+    let question_message = createMessage("", question);
+    messages.push(question_message);
+
+    //  messages.contents = contents
+
+    let gptObject = {};
+    gptObject.model = "gpt-4o";
+    // model: "gpt-3.5-turbo",
+    // model: "gpt-4o-mini",
+    // model: 'gpt-4',
+    gptObject.messages = messages;
 
     // Call the OpenAI API
     const completion = await openai.createChatCompletion(gptObject);
@@ -125,10 +140,12 @@ app.post("/upload-resume", upload.single("file"), async (req, res) => {
       .status(500)
       .json({ error: "Something went wrong, please try again later." });
   } finally {
-    // Clean up the uploaded file after processing or in case of error
-    if (filePath) {
-      fs.unlinkSync(filePath);
-    }
+    // Clean up uploaded files after processing or in case of error
+    filePaths.forEach((filePath) => {
+      if (filePath) {
+        fs.unlinkSync(filePath);
+      }
+    });
   }
 });
 
@@ -138,45 +155,57 @@ const imageToBase64 = (filePath) => {
   return base64Image;
 };
 
-const createGptObject = (fileContent, question) => ({
-  // model: "gpt-3.5-turbo",
-  // model: "gpt-4o-mini",
-  // model: 'gpt-4',
-  model: "gpt-4o",
-  messages: [
-    {
-      role: "user",
-      content: `${fileContent}\n\nQuestion: ${question}`,
-    },
-  ],
+const createMessage = (fileContent, question) => ({
+  role: "user",
+  content: `${fileContent}\n\nQuestion: ${question}`,
 });
 
-const createGptObjecForImage = (fileContent, question) => ({
-  // model: "gpt-3.5-turbo",
-  // model: "gpt-4o-mini",
-  // model: 'gpt-4',
-  model: "gpt-4o",
-  messages: [
-    {
-      role: "user",
-      content: [
-        {
-          type: "image_url",
-          image_url: {
-            url: `data:image/jpeg;base64,${fileContent}`,
-          },
-        },
-        {
-          type: "text",
-          text: `${question}`,
-        },
-      ],
-    },
-  ],
-  response_format: {
-    type: "text",
+const createMessageContent = (fileContent) => ({
+  type: "image_url",
+  image_url: {
+    url: `data:image/jpeg;base64,${fileContent}`,
   },
 });
+
+// const createGptObject = (fileContent, question) => ({
+//     // model: "gpt-3.5-turbo",
+//   // model: "gpt-4o-mini",
+//   // model: 'gpt-4',
+//   model: "gpt-4o",
+//   messages: [
+//     {
+//       role: "user",
+//       content: `${fileContent}\n\nQuestion: ${question}`,
+//     },
+//   ],
+// });
+
+// const createGptObjecForImage = (fileContent, question) => ({
+//     // model: "gpt-3.5-turbo",
+//   // model: "gpt-4o-mini",
+//   // model: 'gpt-4',
+//   model: "gpt-4o",
+//   messages: [
+//     {
+//       role: "user",
+//       content: [
+//         {
+//           type: "image_url",
+//           image_url: {
+//             url: `data:image/jpeg;base64,${fileContent}`,
+//           },
+//         },
+//         {
+//           type: "text",
+//           text: `${question}`,
+//         },
+//       ],
+//     },
+//   ],
+//   response_format: {
+//     type: "text",
+//   },
+// });
 
 // function to work as chat bot
 async function main() {
